@@ -1,101 +1,204 @@
-// server.js
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const db = require("mysql");
+const fileUpload = require("express-fileupload");
 
-const express = require('express');
-const bodyParser = require('body-parser');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const mysql = require('mysql');
-
-const app = express();
-const port = 5000;
-
-app.use(bodyParser.json());
+const connect = express();
+connect.use(cors());
+connect.use(bodyParser.json());
+connect.use(express.json());
+connect.use(express.static('public'));
+connect.use(bodyParser.urlencoded({ extended: true }));
+connect.use(fileUpload());
 
 // MySQL Connection
-const connection = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'shri_selvi_fabric'
+let database = db.createConnection({
+    host: "localhost",
+    user: "root",
+    port: 3306,
+    password: "", // Enter your MySQL password here
+    database: "shri_selvi_fabric"
 });
 
-connection.connect();
+database.connect(function (error) {
+    if (error) {
+        console.error("Error connecting to database:", error);
+    } else {
+        console.log("Database is connected")
+    }
+});
 
 // Login endpoint
-app.post('/api/login', (req, res) => {
+connect.post('/login', (req, res) => {
     const { username, password } = req.body;
-
-    // Find user by username
-    connection.query('SELECT * FROM users WHERE username = ?', [username], (error, results, fields) => {
+    const sql = 'SELECT * FROM users WHERE username = ?';
+    database.query(sql, [username], (error, result) => {
         if (error) {
-            return res.status(500).json({ message: 'Internal server error' });
+            console.error("Database query error:", error);
+            res.send({ status: "error" });
+        } else if (result.length > 0) {
+            const { username: username1, password: password1, id } = result[0];
+            if (username1 === username && password1 === password) {
+                res.send({ status: "success", id });
+            } else {
+                res.send({ status: "invalid_user" });
+            }
+        } else {
+            res.send({ status: "empty_set" });
         }
-
-        if (results.length === 0) {
-            return res.status(400).json({ message: 'Invalid username or password' });
-        }
-
-        const user = results[0];
-
-        // Validate password
-        if (!bcrypt.compareSync(password, user.password)) {
-            return res.status(400).json({ message: 'Invalid username or password' });
-        }
-
-        // Generate JWT token
-        const token = jwt.sign({ id: user.id, username: user.username }, 'secret_key', { expiresIn: '1h' });
-
-        res.json({ token });
     });
 });
 
-// Get recent transactions
-app.get('/api/transactions', (req, res) => {
-    connection.query('SELECT * FROM transactions ORDER BY date DESC LIMIT 10', (error, results, fields) => {
-        if (error) {
-            return res.status(500).json({ message: 'Internal server error' });
-        }
-        res.json(results);
-    });
-});
+// POST endpoint for submitting transactions
+connect.post('/api/transactions', (req, res) => {
+    const { date, type, amount, category, subCategory, description } = req.body;
+    const file = req.files ? req.files.file : null; // Get uploaded file if exists
 
-// Add new transaction
-app.post('/api/transactions', (req, res) => {
-    const { date, amount, type, category, subCategory, description } = req.body;
-    const newTransaction = { date, amount, type, category, subCategory, description };
-    connection.query('INSERT INTO transactions SET ?', newTransaction, (error, results, fields) => {
-        if (error) {
-            return res.status(500).json({ message: 'Internal server error' });
-        }
-        res.json({ message: 'Transaction added successfully' });
-    });
-});
+    // Prepare SQL query
+    const sql = `INSERT INTO transactions (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    const values = [date, type, amount, category, subCategory, description, file ? file.name : null]; // Save the file name instead of file data
 
-// Update transaction
-app.put('/api/transactions/:id', (req, res) => {
-    const { date, amount, type, category, subCategory, description } = req.body;
-    const transactionId = req.params.id;
-    const updatedTransaction = { date, amount, type, category, subCategory, description };
-    connection.query('UPDATE transactions SET ? WHERE id = ?', [updatedTransaction, transactionId], (error, results, fields) => {
+    // Execute the query
+    database.query(sql, values, (error, result) => {
         if (error) {
-            return res.status(500).json({ message: 'Internal server error' });
+            console.error("Error inserting transaction:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            // Upload file if exists
+            if (file) {
+                file.mv(`public/${file.name}`, (error) => {
+                    if (error) {
+                        console.error("Error uploading file:", error);
+                        res.status(500).json({ error: "Error uploading file" });
+                    } else {
+                        console.log("File uploaded successfully");
+                        res.status(200).json({ message: "Transaction added successfully", fileUploaded: true });
+                    }
+                });
+            } else {
+                res.status(200).json({ message: "Transaction added successfully", fileUploaded: false });
+            }
         }
-        res.json({ message: 'Transaction updated successfully' });
-    });
-});
-
-// Delete transaction
-app.delete('/api/transactions/:id', (req, res) => {
-    const transactionId = req.params.id;
-    connection.query('DELETE FROM transactions WHERE id = ?', [transactionId], (error, results, fields) => {
-        if (error) {
-            return res.status(500).json({ message: 'Internal server error' });
-        }
-        res.json({ message: 'Transaction deleted successfully' });
     });
 });
 
 
-app.listen(port, () => {
-    console.log(`Server is listening at http://localhost:${port}`);
+// GET endpoint for fetching recent transactions
+connect.get('/api/transactions', (req, res) => {
+    database.query('SELECT * FROM transactions', (error, results) => {
+        if (error) {
+            console.error("Error fetching recent transactions:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            res.json(results);
+        }
+    });
+});
+
+// Endpoint for adding a weaver
+connect.post('/api/weavers', (req, res) => {
+    const {
+        date,
+        weaverName,
+        loomName,
+        loomNumber,
+        address,
+        mobileNumber1,
+        mobileNumber2,
+        reference
+    } = req.body;
+
+    // Extract document from request
+    const document = req.files ? req.files.document : null;
+
+    // Get the original file name
+    const originalFileName = document ? document.name : null;
+
+    const sql = 'INSERT INTO weavers (date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const values = [date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, originalFileName];
+
+    database.query(sql, values, (error, result) => {
+        if (error) {
+            console.error("Error adding weaver:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            // Upload document if exists
+            if (document) {
+                document.mv(`public/${document.name}`, (error) => {
+                    if (error) {
+                        console.error("Error uploading document:", error);
+                        res.status(500).json({ error: "Error uploading document" });
+                    } else {
+                        console.log("Document uploaded successfully");
+                        res.status(201).json({ message: "Weaver added successfully" });
+                    }
+                });
+            } else {
+                res.status(201).json({ message: "Weaver added successfully" });
+            }
+        }
+    });
+});
+
+
+
+
+// Get all weavers
+connect.get('/api/weavers', (req, res) => {
+    database.query('SELECT * FROM weavers', (error, results) => {
+        if (error) {
+            console.error("Error fetching weavers:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            res.json(results);
+        }
+    });
+});
+
+connect.get('/api/weavers/:id', (req, res) => {
+    database.query('SELECT * FROM weavers', (error, results) => {
+        if (error) {
+            console.error("Error fetching weavers:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            res.json(results);
+        }
+    });
+});
+
+// Endpoint for adding a saree design
+connect.post('/api/saree-design', (req, res) => {
+    const { weaverId, loomNumber } = req.body;
+    const image = req.files ? req.files.image : null;
+
+    // Insert the data into the saree_design table
+    const sql = 'INSERT INTO saree_design (weaver_id, loom_number, image) VALUES (?, ?, ?)';
+    const values = [weaverId, loomNumber, image ? image.name : null];
+
+    database.query(sql, values, (error, result) => {
+        if (error) {
+            console.error("Error inserting saree design:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else {
+            // Upload image if exists
+            if (image) {
+                image.mv(`public/${image.name}`, (error) => {
+                    if (error) {
+                        console.error("Error uploading image:", error);
+                        res.status(500).json({ error: "Error uploading image" });
+                    } else {
+                        console.log("Image uploaded successfully");
+                        res.status(201).json({ message: "Saree design added successfully" });
+                    }
+                });
+            } else {
+                res.status(201).json({ message: "Saree design added successfully" });
+            }
+        }
+    });
+});
+
+connect.listen(3662, () => {
+    console.log("Your server is running")
 });
