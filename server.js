@@ -17,7 +17,7 @@ let database = db.createConnection({
     host: "localhost",
     user: "root",
     port: 3306,
-    password: "", // Enter your MySQL password here
+    password: "",
     database: "shri_selvi_fabric"
 });
 
@@ -29,7 +29,7 @@ database.connect(function (error) {
     }
 });
 
-// Login endpoint
+// Login
 connect.post('/login', (req, res) => {
     const { username, password } = req.body;
     const sql = 'SELECT * FROM users WHERE username = ?';
@@ -50,22 +50,19 @@ connect.post('/login', (req, res) => {
     });
 });
 
-// POST endpoint for submitting transactions
+// POST transactions
 connect.post('/api/transactions', (req, res) => {
     const { date, type, amount, category, subCategory, description } = req.body;
-    const file = req.files ? req.files.file : null; // Get uploaded file if exists
+    const file = req.files ? req.files.file : null;
 
-    // Prepare SQL query
     const sql = `INSERT INTO transactions (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-    const values = [date, type, amount, category, subCategory, description, file ? file.name : null]; // Save the file name instead of file data
+    const values = [date, type, amount, category, subCategory, description, file ? file.name : null];
 
-    // Execute the query
     database.query(sql, values, (error, result) => {
         if (error) {
             console.error("Error inserting transaction:", error);
             res.status(500).json({ error: "Internal server error" });
         } else {
-            // Upload file if exists
             if (file) {
                 file.mv(`public/${file.name}`, (error) => {
                     if (error) {
@@ -84,7 +81,7 @@ connect.post('/api/transactions', (req, res) => {
 });
 
 
-// GET endpoint for fetching recent transactions
+// GET recent transactions
 connect.get('/api/transactions', (req, res) => {
     database.query('SELECT * FROM transactions', (error, results) => {
         if (error) {
@@ -96,7 +93,7 @@ connect.get('/api/transactions', (req, res) => {
     });
 });
 
-// Endpoint for adding a weaver
+// weaver
 connect.post('/api/weavers', (req, res) => {
     const {
         date,
@@ -109,10 +106,8 @@ connect.post('/api/weavers', (req, res) => {
         reference
     } = req.body;
 
-    // Extract document from request
     const document = req.files ? req.files.document : null;
 
-    // Get the original file name
     const originalFileName = document ? document.name : null;
 
     const sql = 'INSERT INTO weavers (date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -123,7 +118,6 @@ connect.post('/api/weavers', (req, res) => {
             console.error("Error adding weaver:", error);
             res.status(500).json({ error: "Internal server error" });
         } else {
-            // Upload document if exists
             if (document) {
                 document.mv(`public/${document.name}`, (error) => {
                     if (error) {
@@ -144,7 +138,7 @@ connect.post('/api/weavers', (req, res) => {
 
 
 
-// Get all weavers
+// Get weavers
 connect.get('/api/weavers', (req, res) => {
     database.query('SELECT * FROM weavers', (error, results) => {
         if (error) {
@@ -167,37 +161,6 @@ connect.get('/api/weavers/:id', (req, res) => {
     });
 });
 
-// Endpoint for adding a saree design
-connect.post('/api/saree-design', (req, res) => {
-    const { weaverId, loomNumber } = req.body;
-    const image = req.files ? req.files.image : null;
-
-    // Insert the data into the saree_design table
-    const sql = 'INSERT INTO saree_design (weaver_id, loom_number, image) VALUES (?, ?, ?)';
-    const values = [weaverId, loomNumber, image ? image.name : null];
-
-    database.query(sql, values, (error, result) => {
-        if (error) {
-            console.error("Error inserting saree design:", error);
-            res.status(500).json({ error: "Internal server error" });
-        } else {
-            // Upload image if exists
-            if (image) {
-                image.mv(`public/${image.name}`, (error) => {
-                    if (error) {
-                        console.error("Error uploading image:", error);
-                        res.status(500).json({ error: "Error uploading image" });
-                    } else {
-                        console.log("Image uploaded successfully");
-                        res.status(201).json({ message: "Saree design added successfully" });
-                    }
-                });
-            } else {
-                res.status(201).json({ message: "Saree design added successfully" });
-            }
-        }
-    });
-});
 
 connect.listen(3662, () => {
     console.log("Your server is running")
