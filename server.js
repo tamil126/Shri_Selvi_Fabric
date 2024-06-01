@@ -7,7 +7,12 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: 'http://localhost:3000',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(bodyParser.json());
 app.use(express.json());
 app.use(express.static('public'));
@@ -15,27 +20,38 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(fileUpload());
 
 // MySQL Connection
-const database = mysql.createConnection({
+const dbConfig = {
     host: "localhost",
     user: "root",
-    port: 3306,
     password: "",
     database: "shri_selvi_fabric"
-});
+};
 
-database.connect(error => {
-    if (error) {
-        console.error("Error connecting to database:", error);
-    } else {
-        console.log("Database is connected");
-    }
-});
+let database;
 
-// app.use(express.static(path.join(__dirname, 'frontend/shri_selvi_fabric/build')));
+function handleDisconnect() {
+    database = mysql.createConnection(dbConfig);
 
-// app.get('*', (req, res) => {
-//     res.sendFile(path.join(__dirname, 'frontend/shri_selvi_fabric/build', 'index.html'));
-//   });
+    database.connect(error => {
+        if (error) {
+            console.error("Error connecting to database:", error);
+            setTimeout(handleDisconnect, 2000); // Attempt to reconnect after 2 seconds
+        } else {
+            console.log("Database is connected");
+        }
+    });
+
+    database.on("error", error => {
+        console.error("Database error:", error);
+        if (error.code === "PROTOCOL_CONNECTION_LOST" || error.code === "ECONNRESET" || error.code === "ETIMEDOUT") {
+            handleDisconnect();
+        } else {
+            throw error;
+        }
+    });
+}
+
+handleDisconnect();
 
 const uploadFolders = {
     transactions: 'public/transactions_files',
@@ -54,7 +70,7 @@ function getUploadFolder(endpoint) {
 }
 
 // Login
-app.post('/login', (req, res) => {
+app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
     const sql = 'SELECT * FROM users WHERE username = ?';
     database.query(sql, [username], (error, result) => {
@@ -77,7 +93,7 @@ app.post('/login', (req, res) => {
 // POST transaction
 app.post('/api/transactions', (req, res) => {
     const { date, type, amount, category, subCategory, description } = req.body;
-    const file = req.files ? req.files.file : null;
+    const file = req.files ? req.files.files[0] : null;
 
     if (!file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -111,7 +127,7 @@ app.post('/api/transactions', (req, res) => {
 app.put('/api/transactions/:id', (req, res) => {
     const { id } = req.params;
     const { date, type, amount, category, subCategory, description } = req.body;
-    const file = req.files ? req.files.file : null;
+    const file = req.files ? req.files.files[0] : null;
 
     // Fetch original file name
     const getOriginalFileSQL = 'SELECT file FROM transactions WHERE id = ?';
@@ -170,6 +186,31 @@ app.get('/api/transactions', (req, res) => {
         } else {
             res.json(results);
         }
+    });
+});
+
+// Get distinct categories and subcategories
+app.get('/api/categories', (req, res) => {
+    const categoriesQuery = 'SELECT DISTINCT category FROM transactions';
+    const subCategoriesQuery = 'SELECT DISTINCT subCategory FROM transactions';
+
+    database.query(categoriesQuery, (categoryError, categoryResults) => {
+        if (categoryError) {
+            console.error("Error fetching categories:", categoryError);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+
+        database.query(subCategoriesQuery, (subCategoryError, subCategoryResults) => {
+            if (subCategoryError) {
+                console.error("Error fetching subcategories:", subCategoryError);
+                return res.status(500).json({ error: "Internal server error" });
+            }
+
+            const categories = categoryResults.map(result => result.category);
+            const subCategories = subCategoryResults.map(result => result.subCategory);
+
+            res.json({ categories, subCategories });
+        });
     });
 });
 
@@ -272,256 +313,58 @@ app.get('/api/weavers', (req, res) => {
     });
 });
 
-// POST design
-app.post('/api/designs', (req, res) => {
-    const { loomId, designName, designBy } = req.body;
-    const planSheet = req.files ? req.files.planSheet : null;
-    const design = req.files ? req.files.design : null;
-
-    if (!planSheet || !design) {
-        return res.status(400).json({ error: "Both plan sheet and design files must be uploaded" });
-    }
-
-    const uploadFolder = getUploadFolder('designs');
-    const planSheetUploadPath = path.join(uploadFolder, planSheet.name);
-    const designUploadPath = path.join(uploadFolder, design.name);
-
-    planSheet.mv(planSheetUploadPath, error => {
-        if (error) {
-            console.error("Error uploading plan sheet:", error);
-            return res.status(500).json({ error: "Error uploading plan sheet" });
-        }
-
-        design.mv(designUploadPath, error => {
-            if (error) {
-                console.error("Error uploading design:", error);
-                return res.status(500).json({ error: "Error uploading design" });
-            }
-
-            console.log("Files uploaded successfully");
-            const sql = 'INSERT INTO designs (loomId, planSheet, designName, designBy, design) VALUES (?, ?, ?, ?, ?)';
-            const values = [loomId, planSheet.name, designName, designBy, design.name];
-
-            database.query(sql, values, (error, result) => {
-                if (error) {
-                    console.error("Error adding design:", error);
-                    return res.status(500).json({ error: "Internal server error" });
-                }
-
-                res.status(201).json({ message: "Design added successfully" });
-            });
-        });
-    });
-});
-
-// PUT design
-app.put('/api/designs/:id', (req, res) => {
+// GET weaver by ID
+app.get('/api/weavers/:id', (req, res) => {
     const { id } = req.params;
-    const { loomId, designName, designBy } = req.body;
-    const planSheet = req.files ? req.files.planSheet : null;
-    const design = req.files ? req.files.design : null;
-
-    // Fetch original files names
-    const getOriginalFilesSQL = 'SELECT planSheet, design FROM designs WHERE id = ?';
-    database.query(getOriginalFilesSQL, [id], (error, results) => {
+    const sql = 'SELECT * FROM weavers WHERE id = ?';
+    database.query(sql, [id], (error, results) => {
         if (error) {
-            console.error("Error fetching original files:", error);
-            return res.status(500).json({ error: "Internal server error" });
+            console.error("Error fetching weaver:", error);
+            res.status(500).json({ error: "Internal server error" });
+        } else if (results.length > 0) {
+            res.json(results[0]);
+        } else {
+            res.status(404).json({ error: "Weaver not found" });
         }
-
-        const originalPlanSheet = results[0]?.planSheet;
-        const originalDesign = results[0]?.design;
-        const uploadFolder = getUploadFolder('designs');
-        const planSheetUploadPath = planSheet ? path.join(uploadFolder, planSheet.name) : null;
-        const designUploadPath = design ? path.join(uploadFolder, design.name) : null;
-
-        const sql = `UPDATE designs SET loomId=?, designName=?, designBy=?, planSheet=?, design=? WHERE id=?`;
-        const values = [loomId, designName, designBy, planSheet ? planSheet.name : originalPlanSheet, design ? design.name : originalDesign, id];
-
-        database.query(sql, values, (error, result) => {
-            if (error) {
-                console.error("Error updating design:", error);
-                return res.status(500).json({ error: "Internal server error" });
-            }
-
-            if (planSheet || design) {
-                // Delete old files if new ones are uploaded
-                if (originalPlanSheet) {
-                    fs.unlink(path.join(uploadFolder, originalPlanSheet), error => {
-                        if (error) {
-                            console.error("Error deleting old plan sheet:", error);
-                        }
-                    });
-                }
-
-                if (originalDesign) {
-                    fs.unlink(path.join(uploadFolder, originalDesign), error => {
-                        if (error) {
-                            console.error("Error deleting old design:", error);
-                        }
-                    });
-                }
-
-                // Move the new files to the upload folder
-                if (planSheet) {
-                    planSheet.mv(planSheetUploadPath, error => {
-                        if (error) {
-                            console.error("Error uploading plan sheet:", error);
-                            return res.status(500).json({ error: "Error uploading plan sheet" });
-                        }
-                    });
-                }
-
-                if (design) {
-                    design.mv(designUploadPath, error => {
-                        if (error) {
-                            console.error("Error uploading design:", error);
-                            return res.status(500).json({ error: "Error uploading design" });
-                        }
-                    });
-                }
-
-                console.log("Files uploaded successfully");
-                res.status(200).json({ message: "Design updated successfully", filesUploaded: true });
-            } else {
-                res.status(200).json({ message: "Design updated successfully", filesUploaded: false });
-            }
-        });
     });
 });
 
-// POST design
-app.post('/api/designs', (req, res) => {
-    const { weaverId, designName, designBy, planSheet } = req.body;
-    const { loomName, loomNumber } = req.body; // New fields for loom name and number
-    const image = req.files ? req.files.image : null;
+// DELETE weaver by ID
+app.delete('/api/weavers/:id', (req, res) => {
+    const { id } = req.params;
 
-    if (!image) {
-        return res.status(400).json({ error: "No image uploaded" });
-    }
-
-    // Get loomId based on weaverId
-    const getLoomIdSQL = 'SELECT loomId FROM weavers WHERE id = ?';
-    database.query(getLoomIdSQL, [weaverId], (error, results) => {
+    // Fetch document name before deleting
+    const getDocumentSQL = 'SELECT document FROM weavers WHERE id = ?';
+    database.query(getDocumentSQL, [id], (error, results) => {
         if (error) {
-            console.error("Error fetching loomId:", error);
+            console.error("Error fetching document:", error);
             return res.status(500).json({ error: "Internal server error" });
         }
-        const loomId = results[0]?.loomId;
 
-        // Fetch loom name and number based on loomId
-        const getLoomInfoSQL = 'SELECT name AS loomName, loomNumber FROM loom WHERE id = ?';
-        database.query(getLoomInfoSQL, [loomId], (error, results) => {
+        const document = results[0]?.document;
+        const sql = 'DELETE FROM weavers WHERE id = ?';
+
+        database.query(sql, [id], (error, result) => {
             if (error) {
-                console.error("Error fetching loom info:", error);
+                console.error("Error deleting weaver:", error);
                 return res.status(500).json({ error: "Internal server error" });
             }
-            const { loomName, loomNumber } = results[0] || {};
 
-            const uploadFolder = getUploadFolder('designs');
-            const fileUploadPath = path.join(uploadFolder, image.name);
-
-            image.mv(fileUploadPath, error => {
-                if (error) {
-                    console.error("Error uploading image:", error);
-                    return res.status(500).json({ error: "Error uploading image" });
-                }
-
-                console.log("Image uploaded successfully");
-                const sql = 'INSERT INTO design (loomId, loomName, loomNumber, designName, designBy, planSheet, design) VALUES (?, ?, ?, ?, ?, ?, ?)';
-                const values = [loomId, loomName, loomNumber, designName, designBy, planSheet, image.name];
-
-                database.query(sql, values, (error, result) => {
+            if (document) {
+                const uploadFolder = getUploadFolder('weavers');
+                fs.unlink(path.join(uploadFolder, document), error => {
                     if (error) {
-                        console.error("Error inserting design:", error);
-                        return res.status(500).json({ error: "Internal server error" });
+                        console.error("Error deleting document:", error);
                     }
-
-                    res.status(201).json({ message: "Design added successfully" });
                 });
-            });
-        });
-    });
-});
-
-
-
-// GET designs
-app.get('/api/designs', (req, res) => {
-    database.query('SELECT * FROM designs', (error, results) => {
-        if (error) {
-            console.error("Error fetching designs:", error);
-            res.status(500).json({ error: "Internal server error" });
-        } else {
-            res.json(results);
-        }
-    });
-});
-
-// GET loom numbers for a weaver
-app.get('/api/loom-numbers/:weaverId', (req, res) => {
-    const { weaverId } = req.params;
-
-    const sql = 'SELECT MAX(loomNumber) AS maxLoomNumber FROM weavers WHERE id = ?';
-    database.query(sql, [weaverId], (error, results) => {
-        if (error) {
-            console.error("Error fetching max loom number:", error);
-            res.status(500).json({ error: "Internal server error" });
-        } else {
-            const maxLoomNumber = results[0].maxLoomNumber;
-            const loomNumbers = Array.from({ length: maxLoomNumber }, (_, index) => `Loom ${index + 1}`);
-            res.json(loomNumbers);
-        }
-    });
-});
-
-// POST saree designs
-app.post('/api/saree-designs', (req, res) => {
-    const { weaverId, loomNumber } = req.body;
-    const image = req.files ? req.files.image : null;
-
-    if (!image) {
-        return res.status(400).json({ error: "No image uploaded" });
-    }
-
-    const uploadFolder = getUploadFolder('sareeDesigns');
-    const fileUploadPath = path.join(uploadFolder, image.name);
-
-    image.mv(fileUploadPath, error => {
-        if (error) {
-            console.error("Error uploading image:", error);
-            return res.status(500).json({ error: "Error uploading image" });
-        }
-
-        console.log("Image uploaded successfully");
-        const sql = 'INSERT INTO sareedesign (weaverId, loomNumber, image) VALUES (?, ?, ?)';
-        const values = [weaverId, loomNumber, image.name];
-
-        database.query(sql, values, (error, result) => {
-            if (error) {
-                console.error("Error inserting saree design:", error);
-                return res.status(500).json({ error: "Internal server error" });
             }
 
-            res.status(201).json({ message: "Saree design added successfully" });
+            res.status(200).json({ message: "Weaver deleted successfully" });
         });
     });
 });
 
-// GET saree designs
-app.get('/api/saree-designs', (req, res) => {
-    const sql = 'SELECT sd.id, sd.weaverId, sd.loomNumber, sd.image, sd.created_at, w.weaverName FROM sareedesign sd JOIN weavers w ON sd.weaverId = w.id';
-    database.query(sql, (error, result) => {
-        if (error) {
-            console.error("Error fetching saree designs:", error);
-            res.status(500).json({ error: "Internal server error" });
-        } else {
-            res.json(result);
-        }
-    });
-});
-
-// Start the server
-app.listen(3662, () => {
-    console.log("Your server is running on port 3662");
+const port = 3662;
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
 });
