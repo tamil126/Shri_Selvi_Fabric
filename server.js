@@ -3,8 +3,9 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const mysql = require("mysql");
 const fileUpload = require("express-fileupload");
-const fs = require("fs");
-const path = require("path");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { v4: uuidv4 } = require("uuid");
+require('dotenv').config();
 
 const app = express();
 app.use(cors({
@@ -15,9 +16,17 @@ app.use(cors({
 
 app.use(bodyParser.json());
 app.use(express.json());
-app.use(express.static('public'));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(fileUpload());
+
+// Configure AWS SDK v3
+const s3Client = new S3Client({
+    region: process.env.AWS_REGION,
+    credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    }
+});
 
 // MySQL Connection
 const dbConfig = {
@@ -35,7 +44,7 @@ function handleDisconnect() {
     database.connect(error => {
         if (error) {
             console.error("Error connecting to database:", error);
-            setTimeout(handleDisconnect, 2000); // Attempt to reconnect after 2 seconds
+            setTimeout(handleDisconnect, 2000); 
         } else {
             console.log("Database is connected");
         }
@@ -53,21 +62,36 @@ function handleDisconnect() {
 
 handleDisconnect();
 
-const uploadFolders = {
-    transactions: 'public/transactions_files',
-    weavers: 'public/weavers_files',
-    sareeDesigns: 'public/saree_design_files'
+// Function to upload file to S3
+const uploadToS3 = async (file, folder = 'transactions') => {
+    const uniqueFileName = `${folder}/${Date.now()}_${uuidv4()}_${file.name}`;
+    const params = {
+        Bucket: 'newrainsarees',
+        Key: uniqueFileName,
+        Body: file.data
+    };
+    const command = new PutObjectCommand(params);
+    const response = await s3Client.send(command);
+    return {
+        Location: `https://${params.Bucket}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`,
+        uniqueFileName
+    };
 };
 
-Object.values(uploadFolders).forEach(folder => {
-    if (!fs.existsSync(folder)) {
-        fs.mkdirSync(folder, { recursive: true });
-    }
-});
+// Utility function to format date to YYYY-MM-DD
+const formatDate = (date) => {
+    const d = new Date(date);
+    let month = '' + (d.getMonth() + 1);
+    let day = '' + d.getDate();
+    const year = d.getFullYear();
 
-function getUploadFolder(endpoint) {
-    return uploadFolders[endpoint] || 'public/uploads';
-}
+    if (month.length < 2) 
+        month = '0' + month;
+    if (day.length < 2) 
+        day = '0' + day;
+
+    return [year, month, day].join('-');
+};
 
 // Login
 app.post('/api/login', (req, res) => {
@@ -91,26 +115,19 @@ app.post('/api/login', (req, res) => {
 });
 
 // POST transaction
-app.post('/api/transactions', (req, res) => {
+app.post('/api/transactions', async (req, res) => {
     const { date, type, amount, category, subCategory, description } = req.body;
-    const file = req.files ? req.files.files[0] : null;
+    const file = req.files ? req.files.files : null;
 
     if (!file) {
         return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const uploadFolder = getUploadFolder('transactions');
-    const fileUploadPath = path.join(uploadFolder, file.name);
-
-    file.mv(fileUploadPath, error => {
-        if (error) {
-            console.error("Error uploading file:", error);
-            return res.status(500).json({ error: "Error uploading file" });
-        }
-
-        console.log("File uploaded successfully");
+    try {
+        const { Location, uniqueFileName } = await uploadToS3(file, 'transactions');
+        const formattedDate = formatDate(date);
         const sql = `INSERT INTO transactions (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        const values = [date, type, amount, category, subCategory, description, file.name];
+        const values = [formattedDate, type, amount, category, subCategory, description, uniqueFileName];
 
         database.query(sql, values, (error, result) => {
             if (error) {
@@ -118,31 +135,46 @@ app.post('/api/transactions', (req, res) => {
                 return res.status(500).json({ error: "Internal server error" });
             }
 
-            res.status(200).json({ message: "Transaction added successfully", fileUploaded: true });
+            res.status(200).json({ message: "Transaction added successfully", fileUploaded: true, fileUrl: Location });
         });
-    });
+    } catch (error) {
+        console.error("Error uploading to S3:", error);
+        res.status(500).json({ error: "Error uploading file" });
+    }
 });
 
 // PUT transaction
-app.put('/api/transactions/:id', (req, res) => {
+app.put('/api/transactions/:id', async (req, res) => {
     const { id } = req.params;
     const { date, type, amount, category, subCategory, description } = req.body;
-    const file = req.files ? req.files.files[0] : null;
+    const file = req.files ? req.files.files : null;
 
     // Fetch original file name
     const getOriginalFileSQL = 'SELECT file FROM transactions WHERE id = ?';
-    database.query(getOriginalFileSQL, [id], (error, results) => {
+    database.query(getOriginalFileSQL, [id], async (error, results) => {
         if (error) {
             console.error("Error fetching original file:", error);
             return res.status(500).json({ error: "Internal server error" });
         }
 
         const originalFile = results[0]?.file;
-        const uploadFolder = getUploadFolder('transactions');
-        const fileUploadPath = file ? path.join(uploadFolder, file.name) : null;
+        let fileUrl = originalFile;
+        let uniqueFileName = originalFile;
 
+        if (file) {
+            try {
+                const uploadResult = await uploadToS3(file, 'transactions');
+                fileUrl = uploadResult.Location;
+                uniqueFileName = uploadResult.uniqueFileName;
+            } catch (error) {
+                console.error("Error uploading to S3:", error);
+                return res.status(500).json({ error: "Error uploading file" });
+            }
+        }
+
+        const formattedDate = formatDate(date);
         const sql = `UPDATE transactions SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
-        const values = [date, type, amount, category, subCategory, description, file ? file.name : originalFile, id];
+        const values = [formattedDate, type, amount, category, subCategory, description, uniqueFileName, id];
 
         database.query(sql, values, (error, result) => {
             if (error) {
@@ -150,29 +182,7 @@ app.put('/api/transactions/:id', (req, res) => {
                 return res.status(500).json({ error: "Internal server error" });
             }
 
-            if (file) {
-                // Delete old file if a new one is uploaded
-                if (originalFile) {
-                    fs.unlink(path.join(uploadFolder, originalFile), error => {
-                        if (error) {
-                            console.error("Error deleting old file:", error);
-                        }
-                    });
-                }
-
-                // Move the new file to the upload folder
-                file.mv(fileUploadPath, error => {
-                    if (error) {
-                        console.error("Error uploading file:", error);
-                        return res.status(500).json({ error: "Error uploading file" });
-                    }
-
-                    console.log("File uploaded successfully");
-                    res.status(200).json({ message: "Transaction updated successfully", fileUploaded: true });
-                });
-            } else {
-                res.status(200).json({ message: "Transaction updated successfully", fileUploaded: false });
-            }
+            res.status(200).json({ message: "Transaction updated successfully", fileUploaded: !!file, fileUrl });
         });
     });
 });
@@ -184,7 +194,12 @@ app.get('/api/transactions', (req, res) => {
             console.error("Error fetching recent transactions:", error);
             res.status(500).json({ error: "Internal server error" });
         } else {
-            res.json(results);
+            // Ensure dates are formatted correctly before sending them to the frontend
+            const formattedResults = results.map(transaction => ({
+                ...transaction,
+                date: formatDate(transaction.date)
+            }));
+            res.json(formattedResults);
         }
     });
 });
@@ -215,152 +230,218 @@ app.get('/api/categories', (req, res) => {
 });
 
 // POST weavers
-app.post('/api/weavers', (req, res) => {
-    const { date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference } = req.body;
-    const document = req.files ? req.files.document : null;
+app.post('/api/weavers', async (req, res) => {
+    const { date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
+    const file = req.files ? req.files.idProof : null;
 
-    if (!document) {
-        return res.status(400).json({ error: "No document uploaded" });
+    try {
+        let fileUrl = '';
+        if (file) {
+            const uniqueFileName = `${Date.now()}_${uuidv4()}_${file.name}`;
+            const uploadResult = await uploadToS3(file, uniqueFileName);
+            fileUrl = uploadResult.Location;
+        }
+
+        const sql = `INSERT INTO weavers (date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        const values = [date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, fileUrl];
+
+        database.query(sql, values, (error, result) => {
+            if (error) {
+                console.error("Error inserting weaver:", error);
+                return res.status(500).json({ error: "Internal server error" });
+            }
+
+            res.status(200).json({ message: "Weaver added successfully", fileUploaded: !!file });
+        });
+    } catch (error) {
+        console.error("Error uploading to S3:", error);
+        res.status(500).json({ error: "Error uploading file" });
+    }
+});
+// Endpoint to update a weaver
+app.put('/api/weavers/:id', async (req, res) => {
+    const { id } = req.params;
+    const { date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
+    const idProof = req.files ? req.files.idProof : null;
+
+    let idProofUrl = null;
+    if (idProof) {
+        try {
+            const uploadResult = await uploadToS3(idProof, 'weavers');
+            idProofUrl = uploadResult.Location;
+        } catch (error) {
+            console.error('Error uploading ID proof to S3:', error);
+            return res.status(500).json({ error: 'Error uploading ID proof' });
+        }
     }
 
-    const uploadFolder = getUploadFolder('weavers');
-    const fileUploadPath = path.join(uploadFolder, document.name);
+    const sql = 'UPDATE weavers SET date=?, weaverName=?, loomName=?, address=?, area=?, mobileNumber1=?, mobileNumber2=?, reference=?, description=?, idProof=? WHERE id=?';
+    const values = [date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, idProofUrl, id];
 
-    document.mv(fileUploadPath, error => {
+    database.query(sql, values, (error, result) => {
         if (error) {
-            console.error("Error uploading document:", error);
-            return res.status(500).json({ error: "Error uploading document" });
+            console.error('Error updating weaver:', error);
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
-        console.log("Document uploaded successfully");
-        const sql = 'INSERT INTO weavers (date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-        const values = [date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, document.name];
-
-        database.query(sql, values, (error, result) => {
-            if (error) {
-                console.error("Error adding weaver:", error);
-                return res.status(500).json({ error: "Internal server error" });
-            }
-
-            res.status(201).json({ message: "Weaver added successfully" });
-        });
+        res.status(200).json({ message: 'Weaver updated successfully' });
     });
 });
 
-// PUT weaver
-app.put('/api/weavers/:id', (req, res) => {
-    const { id } = req.params;
-    const { date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference } = req.body;
-    const document = req.files ? req.files.document : null;
-
-    // Fetch original document name
-    const getOriginalFileSQL = 'SELECT document FROM weavers WHERE id = ?';
-    database.query(getOriginalFileSQL, [id], (error, results) => {
-        if (error) {
-            console.error("Error fetching original document:", error);
-            return res.status(500).json({ error: "Internal server error" });
-        }
-
-        const originalDocument = results[0]?.document;
-        const uploadFolder = getUploadFolder('weavers');
-        const fileUploadPath = document ? path.join(uploadFolder, document.name) : null;
-
-        const sql = `UPDATE weavers SET date=?, weaverName=?, loomName=?, loomNumber=?, address=?, mobileNumber1=?, mobileNumber2=?, reference=?, document=? WHERE id=?`;
-        const values = [date, weaverName, loomName, loomNumber, address, mobileNumber1, mobileNumber2, reference, document ? document.name : originalDocument, id];
-
-        database.query(sql, values, (error, result) => {
-            if (error) {
-                console.error("Error updating weaver:", error);
-                return res.status(500).json({ error: "Internal server error" });
-            }
-
-            if (document) {
-                // Delete old document if a new one is uploaded
-                if (originalDocument) {
-                    fs.unlink(path.join(uploadFolder, originalDocument), error => {
-                        if (error) {
-                            console.error("Error deleting old document:", error);
-                        }
-                    });
-                }
-
-                // Move the new document to the upload folder
-                document.mv(fileUploadPath, error => {
-                    if (error) {
-                        console.error("Error uploading document:", error);
-                        return res.status(500).json({ error: "Error uploading document" });
-                    }
-
-                    console.log("Document uploaded successfully");
-                    res.status(200).json({ message: "Weaver updated successfully", fileUploaded: true });
-                });
-            } else {
-                res.status(200).json({ message: "Weaver updated successfully", fileUploaded: false });
-            }
-        });
-    });
-});
-
-// GET weavers
+// Endpoint to get all weavers
 app.get('/api/weavers', (req, res) => {
     database.query('SELECT * FROM weavers', (error, results) => {
         if (error) {
-            console.error("Error fetching weavers:", error);
-            res.status(500).json({ error: "Internal server error" });
+            console.error('Error fetching weavers:', error);
+            res.status(500).json({ error: 'Internal server error' });
         } else {
             res.json(results);
         }
     });
 });
 
-// GET weaver by ID
-app.get('/api/weavers/:id', (req, res) => {
-    const { id } = req.params;
-    const sql = 'SELECT * FROM weavers WHERE id = ?';
-    database.query(sql, [id], (error, results) => {
+// Endpoint to add a loom
+app.post('/api/looms', (req, res) => {
+    const { loomName, loomNumber, loomType, jacquardType, hooks, description } = req.body;
+
+    const sql = 'INSERT INTO looms (loomName, loomNumber, loomType, jacquardType, hooks, description) VALUES (?, ?, ?, ?, ?, ?)';
+    const values = [loomName, loomNumber, loomType, jacquardType, hooks, description];
+
+    database.query(sql, values, (error, result) => {
         if (error) {
-            console.error("Error fetching weaver:", error);
-            res.status(500).json({ error: "Internal server error" });
-        } else if (results.length > 0) {
-            res.json(results[0]);
+            console.error('Error inserting loom:', error);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+
+        res.status(200).json({ message: 'Loom added successfully', id: result.insertId });
+    });
+});
+
+// PUT loom
+app.put('/api/looms/:id', async (req, res) => {
+    const { id } = req.params;
+    const { loomName, loomNumber, loomType, loomTypeOther, jacquardType, jacquardTypeOther, hooks, description } = req.body;
+
+    const finalLoomType = loomType === 'other' ? loomTypeOther : loomType;
+    const finalJacquardType = jacquardType === 'other' ? jacquardTypeOther : jacquardType;
+
+    const sql = `UPDATE looms SET loomName=?, loomNumber=?, loomType=?, jacquardType=?, hooks=?, description=? WHERE id=?`;
+    const values = [loomName, loomNumber, finalLoomType, finalJacquardType, hooks, description, id];
+
+    database.query(sql, values, (error, result) => {
+        if (error) {
+            console.error("Error updating loom:", error);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+
+        res.status(200).json({ message: "Loom updated successfully" });
+    });
+});
+
+// Endpoint to get all looms
+app.get('/api/looms', (req, res) => {
+    database.query('SELECT * FROM looms', (error, results) => {
+        if (error) {
+            console.error('Error fetching looms:', error);
+            res.status(500).json({ error: 'Internal server error' });
         } else {
-            res.status(404).json({ error: "Weaver not found" });
+            res.json(results);
         }
     });
 });
 
-// DELETE weaver by ID
-app.delete('/api/weavers/:id', (req, res) => {
-    const { id } = req.params;
+// Endpoint to add a design
+app.post('/api/designs', async (req, res) => {
+    const { loomName, loomNumber, designName, designBy } = req.body;
+    const planSheet = req.files ? req.files.planSheet : null;
+    const designUpload = req.files ? req.files.designUpload : null;
 
-    // Fetch document name before deleting
-    const getDocumentSQL = 'SELECT document FROM weavers WHERE id = ?';
-    database.query(getDocumentSQL, [id], (error, results) => {
+    let planSheetUrl = null;
+    if (planSheet) {
+        try {
+            const uploadResult = await uploadToS3(planSheet, 'designs');
+            planSheetUrl = uploadResult.Location;
+        } catch (error) {
+            console.error('Error uploading plan sheet to S3:', error);
+            return res.status(500).json({ error: 'Error uploading plan sheet' });
+        }
+    }
+
+    let designUploadUrl = null;
+    if (designUpload) {
+        try {
+            const uploadResult = await uploadToS3(designUpload, 'designs');
+            designUploadUrl = uploadResult.Location;
+        } catch (error) {
+            console.error('Error uploading design to S3:', error);
+            return res.status(500).json({ error: 'Error uploading design' });
+        }
+    }
+
+    const sql = 'INSERT INTO designs (loomName, loomNumber, planSheet, designName, designBy, designUpload) VALUES (?, ?, ?, ?, ?, ?)';
+    const values = [loomName, loomNumber, planSheetUrl, designName, designBy, designUploadUrl];
+
+    database.query(sql, values, (error, result) => {
         if (error) {
-            console.error("Error fetching document:", error);
-            return res.status(500).json({ error: "Internal server error" });
+            console.error('Error inserting design:', error);
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
-        const document = results[0]?.document;
-        const sql = 'DELETE FROM weavers WHERE id = ?';
+        res.status(200).json({ message: 'Design added successfully', id: result.insertId });
+    });
+});
 
-        database.query(sql, [id], (error, result) => {
-            if (error) {
-                console.error("Error deleting weaver:", error);
-                return res.status(500).json({ error: "Internal server error" });
-            }
+// Endpoint to update a design
+app.put('/api/designs/:id', async (req, res) => {
+    const { id } = req.params;
+    const { loomName, loomNumber, designName, designBy } = req.body;
+    const planSheet = req.files ? req.files.planSheet : null;
+    const designUpload = req.files ? req.files.designUpload : null;
 
-            if (document) {
-                const uploadFolder = getUploadFolder('weavers');
-                fs.unlink(path.join(uploadFolder, document), error => {
-                    if (error) {
-                        console.error("Error deleting document:", error);
-                    }
-                });
-            }
+    let planSheetUrl = null;
+    if (planSheet) {
+        try {
+            const uploadResult = await uploadToS3(planSheet, 'designs');
+            planSheetUrl = uploadResult.Location;
+        } catch (error) {
+            console.error('Error uploading plan sheet to S3:', error);
+            return res.status(500).json({ error: 'Error uploading plan sheet' });
+        }
+    }
 
-            res.status(200).json({ message: "Weaver deleted successfully" });
-        });
+    let designUploadUrl = null;
+    if (designUpload) {
+        try {
+            const uploadResult = await uploadToS3(designUpload, 'designs');
+            designUploadUrl = uploadResult.Location;
+        } catch (error) {
+            console.error('Error uploading design to S3:', error);
+            return res.status(500).json({ error: 'Error uploading design' });
+        }
+    }
+
+    const sql = 'UPDATE designs SET loomName=?, loomNumber=?, planSheet=?, designName=?, designBy=?, designUpload=? WHERE id=?';
+    const values = [loomName, loomNumber, planSheetUrl, designName, designBy, designUploadUrl, id];
+
+    database.query(sql, values, (error, result) => {
+        if (error) {
+            console.error('Error updating design:', error);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+
+        res.status(200).json({ message: 'Design updated successfully' });
+    });
+});
+
+// Endpoint to get all designs
+app.get('/api/designs', (req, res) => {
+    database.query('SELECT * FROM designs', (error, results) => {
+        if (error) {
+            console.error('Error fetching designs:', error);
+            res.status(500).json({ error: 'Internal server error' });
+        } else {
+            res.json(results);
+        }
     });
 });
 

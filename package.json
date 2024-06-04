@@ -8,12 +8,16 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.588.0",
+    "aws-sdk": "^2.1632.0",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-fileupload": "^1.5.0",
     "jsonwebtoken": "^9.0.2",
-    "mysql": "^2.18.1"
+    "mysql": "^2.18.1",
+    "uuid": "^9.0.1"
   }
 }
