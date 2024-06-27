@@ -10,7 +10,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: 'https://newrainbowsarees.in',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -59,7 +59,7 @@ async function handleDisconnect() {
 
 handleDisconnect();
 
-const generateUniqueName = (length = 15) => {
+const generateUniqueName = (length = 6) => {
     return uuidv4().replace(/-/g, '').substring(0, length);
 };
 
@@ -129,7 +129,7 @@ app.post('/api/login', async (req, res) => {
 // Generate a token
 function generateToken(id) {
     const secretKey = '4S$eJ#8dLpR5tY3uI2oP1nGfE6cD5bA';
-    const token = jwt.sign({ id }, secretKey, { expiresIn: '1y' });
+    const token = jwt.sign({ id }, secretKey, { expiresIn: '2s' });
     return token;
 }
 
@@ -253,7 +253,7 @@ app.get('/api/designs', async (req, res) => {
 
 app.get('/api/loomTypes', async (req, res) => {
     try {
-        const [rows] = await database.query('SELECT DISTINCT loomType FROM looms WHERE loomType IS NOT NULL');
+        const [rows] = await database.query('SELECT DISTINCT loomType FROM looms WHERE loomType IS NOT NULL AND loomType != "other"');
         res.json(rows.map(row => row.loomType));
     } catch (err) {
         console.error('Error fetching loom types:', err);
@@ -263,7 +263,7 @@ app.get('/api/loomTypes', async (req, res) => {
 
 app.get('/api/jacquardTypes', async (req, res) => {
     try {
-        const [rows] = await database.query('SELECT DISTINCT jacquardType FROM looms WHERE jacquardType IS NOT NULL');
+        const [rows] = await database.query('SELECT DISTINCT jacquardType FROM looms WHERE jacquardType IS NOT NULL AND jacquardType != "other"');
         res.json(rows.map(row => row.jacquardType));
     } catch (error) {
         console.error('Error fetching jacquard types:', error);
@@ -273,7 +273,7 @@ app.get('/api/jacquardTypes', async (req, res) => {
 
 app.get('/api/designNames', async (req, res) => {
     try {
-        const [rows] = await database.query('SELECT DISTINCT designName FROM designs WHERE designName IS NOT NULL');
+        const [rows] = await database.query('SELECT DISTINCT designName FROM designs WHERE designName IS NOT NULL AND designName != "other"');
         res.json(rows.map(row => row.designName));
     } catch (error) {
         console.error('Error fetching design names:', error);
@@ -282,17 +282,21 @@ app.get('/api/designNames', async (req, res) => {
 });
 
 app.post('/api/weavers', async (req, res) => {
-    const { date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
+    const { weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
     const idProof = req.files ? req.files.idProof : null;
 
     if (!idProof) {
         return res.status(400).json({ error: "No ID Proof uploaded" });
     }
 
+    const [existingWeavers] = await database.query('SELECT * FROM weavers WHERE weaverName = ? OR loomName = ?', [weaverName, loomName]);
+    if (existingWeavers.length > 0) {
+        return res.status(400).json({ error: "Weaver name or Loom name already exists" });
+    }
+
     try {
         const uploadResult = await uploadToS3(idProof, 'weavers');
-        const [result] = await database.query('INSERT INTO weavers (date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, idProof) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, uploadResult.Location]);
-
+        await database.query('INSERT INTO weavers (weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, idProof) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, uploadResult.Location]);
         res.status(200).json({ message: "Weaver added successfully", fileUploaded: true });
     } catch (error) {
         console.error("Error inserting weaver:", error);
@@ -301,7 +305,7 @@ app.post('/api/weavers', async (req, res) => {
 });
 
 app.put('/api/weavers/:id', async (req, res) => {
-    const { date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
+    const { weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
     let idProofUrl = null;
 
     if (req.files && req.files.idProof) {
@@ -313,9 +317,14 @@ app.put('/api/weavers/:id', async (req, res) => {
         }
     }
 
-    const query = "UPDATE weavers SET date = ?, weaverName = ?, loomName = ?, address = ?, area = ?, mobileNumber1 = ?, mobileNumber2 = ?, reference = ?, description = ?, idProof = ? WHERE id = ?";
+    const [existingWeavers] = await database.query('SELECT * FROM weavers WHERE (weaverName = ? OR loomName = ?) AND id != ?', [weaverName, loomName, req.params.id]);
+    if (existingWeavers.length > 0) {
+        return res.status(400).json({ error: "Weaver name or Loom name already exists" });
+    }
+
+    const query = "UPDATE weavers SET weaverName = ?, loomName = ?, address = ?, area = ?, mobileNumber1 = ?, mobileNumber2 = ?, reference = ?, description = ?, idProof = ? WHERE id = ?";
     try {
-        await database.query(query, [date, weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, idProofUrl, req.params.id]);
+        await database.query(query, [weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description, idProofUrl, req.params.id]);
         res.status(200).json({ message: "Weaver updated successfully" });
     } catch (error) {
         console.error("Error updating weaver:", error);
@@ -324,10 +333,22 @@ app.put('/api/weavers/:id', async (req, res) => {
 });
 
 app.post('/api/looms', async (req, res) => {
-    const { loomName, loomNumber, loomType, jacquardType, hooks, description } = req.body;
+    const { loomName, loomNumber, loomType, jacquardType, hooks, description, newLoomType, newJacquardType } = req.body;
+
+    const loomTypeToSave = loomType === 'other' ? newLoomType : loomType;
+    const jacquardTypeToSave = jacquardType === 'other' ? newJacquardType : jacquardType;
+
+    if (loomTypeToSave === 'other' || jacquardTypeToSave === 'other') {
+        return res.status(400).json({ error: "Invalid loom or jacquard type" });
+    }
+
+    const [existingLooms] = await database.query('SELECT * FROM looms WHERE loomName = ?', [loomName]);
+    if (existingLooms.length > 0) {
+        return res.status(400).json({ error: "Loom name already exists" });
+    }
 
     try {
-        const [result] = await database.query('INSERT INTO looms (loomName, loomNumber, loomType, jacquardType, hooks, description, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())', [loomName, loomNumber, loomType, jacquardType, hooks, description]);
+        const [result] = await database.query('INSERT INTO looms (loomName, loomNumber, loomType, jacquardType, hooks, description, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())', [loomName, loomNumber, loomTypeToSave, jacquardTypeToSave, hooks, description]);
 
         res.status(200).json({ message: "Loom added successfully" });
     } catch (error) {
@@ -338,9 +359,26 @@ app.post('/api/looms', async (req, res) => {
 
 app.put('/api/looms/:id', async (req, res) => {
     const { loomName, loomNumber, loomType, jacquardType, hooks, description } = req.body;
+
+    const [existingLooms] = await database.query('SELECT * FROM looms WHERE loomName = ? AND id != ?', [loomName, req.params.id]);
+    if (existingLooms.length > 0) {
+        return res.status(400).json({ error: "Loom name already exists" });
+    }
+
+    const loomTypeValue = loomType === 'other' ? req.body.newLoomType : loomType;
+    const jacquardTypeValue = jacquardType === 'other' ? req.body.newJacquardType : jacquardType;
+
+    if (loomType === 'other') {
+        await database.query('INSERT INTO looms (loomType) VALUES (?)', [req.body.newLoomType]);
+    }
+
+    if (jacquardType === 'other') {
+        await database.query('INSERT INTO looms (jacquardType) VALUES (?)', [req.body.newJacquardType]);
+    }
+
     const query = "UPDATE looms SET loomName = ?, loomNumber = ?, loomType = ?, jacquardType = ?, hooks = ?, description = ?, updatedAt = NOW() WHERE id = ?";
     try {
-        await database.query(query, [loomName, loomNumber, loomType, jacquardType, hooks, description, req.params.id]);
+        await database.query(query, [loomName, loomNumber, loomTypeValue, jacquardTypeValue, hooks, description, req.params.id]);
         res.status(200).json({ message: "Loom updated successfully" });
     } catch (error) {
         console.error("Error updating loom:", error);
@@ -349,7 +387,7 @@ app.put('/api/looms/:id', async (req, res) => {
 });
 
 app.post('/api/designs', async (req, res) => {
-    const { loomName, loomNumber, designName, designBy } = req.body;
+    const { loomName, loomNumber, designName, designBy, newDesignName } = req.body;
     const planSheet = req.files ? req.files.planSheet : null;
     const designUpload = req.files ? req.files.designUpload : null;
 
@@ -357,10 +395,12 @@ app.post('/api/designs', async (req, res) => {
         return res.status(400).json({ error: "Plan Sheet or Design Upload not provided" });
     }
 
+    const designNameToSave = designName === 'other' ? newDesignName : designName;
+
     try {
         const planSheetUploadResult = await uploadToS3(planSheet, 'designs');
         const designUploadResult = await uploadToS3(designUpload, 'designs');
-        const [result] = await database.query('INSERT INTO designs (loomName, loomNumber, planSheet, designName, designBy, designUpload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())', [loomName, loomNumber, planSheetUploadResult.Location, designName, designBy, designUploadResult.Location]);
+        const [result] = await database.query('INSERT INTO designs (loomName, loomNumber, planSheet, designName, designBy, designUpload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())', [loomName, loomNumber, planSheetUploadResult.Location, designNameToSave, designBy, designUploadResult.Location]);
 
         res.status(200).json({ message: "Design added successfully", fileUploaded: true });
     } catch (error) {
@@ -369,39 +409,36 @@ app.post('/api/designs', async (req, res) => {
     }
 });
 
-// Add new loom type
-app.post('/api/loomTypes', async (req, res) => {
-    try {
-        const { value } = req.body;
-        await database.query('INSERT INTO loomTypes (loomType) VALUES (?)', [value]);
-        res.json(value);
-    } catch (error) {
-        console.error('Error adding loom type:', error);
-        res.status(500).json({ message: 'Error adding loom type' });
-    }
-});
+app.put('/api/designs/:id', async (req, res) => {
+    const { loomName, loomNumber, designName, designBy } = req.body;
+    let planSheetUrl = null;
+    let designUploadUrl = null;
 
-// Add new jacquard type
-app.post('/api/jacquardTypes', async (req, res) => {
-    try {
-        const { value } = req.body;
-        await database.query('INSERT INTO jacquardTypes (jacquardType) VALUES (?)', [value]);
-        res.json(value);
-    } catch (error) {
-        console.error('Error adding jacquard type:', error);
-        res.status(500).json({ message: 'Error adding jacquard type' });
+    if (req.files && req.files.planSheet) {
+        try {
+            const s3Result = await uploadToS3(req.files.planSheet, 'designs');
+            planSheetUrl = s3Result.Location;
+        } catch (error) {
+            return res.status(500).send('Error uploading to S3: ' + error.message);
+        }
     }
-});
 
-// Add new design name
-app.post('/api/designNames', async (req, res) => {
+    if (req.files && req.files.designUpload) {
+        try {
+            const s3Result = await uploadToS3(req.files.designUpload, 'designs');
+            designUploadUrl = s3Result.Location;
+        } catch (error) {
+            return res.status(500).send('Error uploading to S3: ' + error.message);
+        }
+    }
+
+    const query = "UPDATE designs SET loomName = ?, loomNumber = ?, designName = ?, designBy = ?, planSheet = COALESCE(?, planSheet), designUpload = COALESCE(?, designUpload), updatedAt = NOW() WHERE id = ?";
     try {
-        const { value } = req.body;
-        await database.query('INSERT INTO designNames (designName) VALUES (?)', [value]);
-        res.json(value);
+        await database.query(query, [loomName, loomNumber, designName, designBy, planSheetUrl, designUploadUrl, req.params.id]);
+        res.status(200).json({ message: "Design updated successfully" });
     } catch (error) {
-        console.error('Error adding design name:', error);
-        res.status(500).json({ message: 'Error adding design name' });
+        console.error("Error updating design:", error);
+        res.status(500).json({ error: "Internal server error" });
     }
 });
 
