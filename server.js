@@ -29,7 +29,7 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "localhost",
+    host: "127.0.0.1",
     user: "root",
     password: "Tamils@126",
     database: "shri_selvi_fabric"
@@ -86,7 +86,6 @@ const deleteFromS3 = async (fileUrl) => {
     await s3Client.send(command);
 };
 
-// Utility function to format date to YYYY-MM-DD
 const formatDate = (date) => {
     const d = new Date(date);
     let month = '' + (d.getMonth() + 1);
@@ -101,7 +100,6 @@ const formatDate = (date) => {
     return [year, month, day].join('-');
 };
 
-// Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     const sql = 'SELECT * FROM users WHERE username =?';
@@ -110,7 +108,7 @@ app.post('/api/login', async (req, res) => {
         if (result.length > 0) {
             const { username: dbUsername, password: dbPassword, id } = result[0];
             if (dbUsername === username && dbPassword === password) {
-                const token = generateToken(id); // Generate a token for the user
+                const token = generateToken(id);
                 res.send({ status: "success", token }); 
             } else {
                 res.send({ status: "invalid_user" });
@@ -124,7 +122,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Generate a token
 function generateToken(id) {
     const secretKey = '4S$eJ#8dLpR5tY3uI2oP1nGfE6cD5bA';
     const token = jwt.sign({ id }, secretKey, { expiresIn: '2s' });
@@ -185,7 +182,7 @@ app.put('/api/transactions/:id', async (req, res) => {
     }
 });
 
-// GET recent transactions
+// GET transactions
 app.get('/api/transactions', async (req, res) => {
     try {
         const [results] = await database.query('SELECT * FROM transactions');
@@ -200,7 +197,7 @@ app.get('/api/transactions', async (req, res) => {
     }
 });
 
-// Get distinct categories and subcategories
+// Get categories and subcategories
 app.get('/api/categories', async (req, res) => {
     const categoriesQuery = 'SELECT DISTINCT category FROM transactions';
     const subCategoriesQuery = 'SELECT DISTINCT subCategory FROM transactions';
