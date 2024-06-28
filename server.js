@@ -20,7 +20,6 @@ app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(fileUpload());
 
-// Configure AWS SDK v3
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
     credentials: {
@@ -29,9 +28,8 @@ const s3Client = new S3Client({
     }
 });
 
-// MySQL Connection
 const dbConfig = {
-    host: "localhost",
+    host: "127.0.0.1",
     user: "root",
     password: "Tamils@126",
     database: "shri_selvi_fabric"
