@@ -104,23 +104,26 @@ app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     const sql = 'SELECT * FROM users WHERE username =?';
     try {
-        const [result] = await database.query(sql, [username]);
-        if (result.length > 0) {
-            const { username: dbUsername, password: dbPassword, id } = result[0];
-            if (dbUsername === username && dbPassword === password) {
-                const token = generateToken(id);
-                res.send({ status: "success", token }); 
-            } else {
-                res.send({ status: "invalid_user" });
-            }
+      const [result] = await database.query(sql, [username]);
+      console.log('Database query result:', result);
+      if (result.length > 0) {
+        const { username: dbUsername, password: dbPassword, id } = result[0];
+        console.log('Comparing passwords:', password, dbPassword);
+        if (dbUsername === username && dbPassword === password) {
+          const token = generateToken(id);
+          console.log('Generated token:', token);
+          res.send({ status: "success", token });
         } else {
-            res.send({ status: "empty_set" });
+          res.send({ status: "invalid_user" });
         }
+      } else {
+        res.send({ status: "empty_set" });
+      }
     } catch (error) {
-        console.error("Database query error:", error);
-        res.send({ status: "error" });
+      console.error("Database query error:", error);
+      res.send({ status: "error" });
     }
-});
+  });
 
 function generateToken(id) {
     const secretKey = '4S$eJ#8dLpR5tY3uI2oP1nGfE6cD5bA';
