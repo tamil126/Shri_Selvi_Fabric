@@ -29,7 +29,7 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "127.0.0.1",
+    host: "localhost",
     user: "root",
     password: "Tamils@126",
     database: "shri_selvi_fabric"
