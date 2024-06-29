@@ -6,11 +6,11 @@ const fileUpload = require("express-fileupload");
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { v4: uuidv4 } = require("uuid");
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
+// require('dotenv').config();
 
 const app = express();
 app.use(cors({
-    origin: 'https://newrainbowsarees.in',
+    origin: 'http://localhost:3000',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -20,18 +20,23 @@ app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(fileUpload());
 
+const AWS_ACCESS_KEY_ID="AKIA2UC3F5GS5WWU3VQQ";
+const AWS_SECRET_ACCESS_KEY="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";
+const AWS_REGION="ap-south-1";
+
+
 const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
+    region: AWS_REGION,
     credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+        accessKeyId: AWS_ACCESS_KEY_ID,
+        secretAccessKey: AWS_SECRET_ACCESS_KEY
     }
 });
 
 const dbConfig = {
-    host: "127.0.0.1",
+    host: "localhost",
     user: "root",
-    password: "Tamils@126",
+    password: "",
     database: "shri_selvi_fabric"
 };
 
@@ -62,6 +67,7 @@ const generateUniqueName = (length = 6) => {
 };
 
 const uploadToS3 = async (file, folder = 'transactions') => {
+    try{
     const uniqueFileName = `${generateUniqueName()}_${file.name}`;
     const params = {
         Bucket: 'newrainsarees',
@@ -71,9 +77,13 @@ const uploadToS3 = async (file, folder = 'transactions') => {
     const command = new PutObjectCommand(params);
     const response = await s3Client.send(command);
     return {
-        Location: `https://${params.Bucket}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`,
+        Location: `https://${params.Bucket}.s3.${AWS_REGION}.amazonaws.com/${params.Key}`,
         uniqueFileName
     };
+}catch(error){
+console.log("Error s3",error);
+throw error;
+}
 };
 
 const deleteFromS3 = async (fileUrl) => {
@@ -280,9 +290,12 @@ app.get('/api/designNames', async (req, res) => {
 });
 
 app.post('/api/weavers', async (req, res) => {
+    console.log("Body: ",req.body);
+    console.log("Files: ",req.files);
     const { weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
     const idProof = req.files ? req.files.idProof : null;
 
+    console.log("idProof:", idProof);
     if (!idProof) {
         return res.status(400).json({ error: "No ID Proof uploaded" });
     }
