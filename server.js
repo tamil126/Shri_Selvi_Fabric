@@ -293,12 +293,14 @@ app.post('/api/weavers', async (req, res) => {
     console.log("Body: ",req.body);
     console.log("Files: ",req.files);
     const { weaverName, loomName, address, area, mobileNumber1, mobileNumber2, reference, description } = req.body;
-    const idProof = req.files ? req.files.idProof : null;
+    // const idProof = req.files ? req.files.idProof : null;
 
     console.log("idProof:", idProof);
-    if (!idProof) {
+    if (!req.files || !req.files.idProof) {
         return res.status(400).json({ error: "No ID Proof uploaded" });
     }
+
+    const idProof = req.files.idProof;
 
     const [existingWeavers] = await database.query('SELECT * FROM weavers WHERE weaverName = ? OR loomName = ?', [weaverName, loomName]);
     if (existingWeavers.length > 0) {
