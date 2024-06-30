@@ -10,7 +10,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: 'https://newrainbowsarees.in/',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -34,9 +34,9 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "localhost",
+    host: "127.0.0.1",
     user: "root",
-    password: "",
+    password: "Tamils@126",
     database: "shri_selvi_fabric"
 };
 
