@@ -6,6 +6,7 @@ const fileUpload = require("express-fileupload");
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { v4: uuidv4 } = require("uuid");
 const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcrypt');
 // require('dotenv').config();
 
 const app = express();
@@ -141,16 +142,46 @@ function generateToken(id) {
     return token;
 }
 
+// Function to check and create table if not exists
+const checkAndCreateTable = async (tableName) => {
+    if (tableName.startsWith('location_')) {
+        const createTableQuery = `
+            CREATE TABLE IF NOT EXISTS \`${tableName}\` (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                date DATE NOT NULL,
+                type VARCHAR(255) NOT NULL,
+                amount DECIMAL(10, 2) NOT NULL,
+                category VARCHAR(255),
+                subCategory VARCHAR(255),
+                description TEXT,
+                file VARCHAR(255)
+            );
+        `;
+        await database.query(createTableQuery);
+    }
+};
+
+// POST createTable
+app.post('/api/transactions/checkAndCreateTable', async (req, res) => {
+    const { tableName } = req.body;
+    try {
+        await checkAndCreateTable(`location_${tableName}`);
+        res.status(200).json({ message: "Table created successfully" });
+    } catch (error) {
+        console.error('Error creating table:', error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
 // POST transaction
-app.post('/api/transactions', async (req, res) => {
+app.post('/api/transactions/:location', async (req, res) => {
+    const { location } = req.params;
     const { date, type, amount, category, subCategory, description } = req.body;
     const file = req.files ? req.files.files : null;
 
     try {
-        const formattedDate = formatDate(date);
-        const sql = `INSERT INTO transactions (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        const values = [formattedDate, type, amount, category, subCategory, description, file ? (await uploadToS3(file, 'transactions')).uniqueFileName : null];
-
+        const sql = `INSERT INTO \`${location}\` (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        const values = [date, type, amount, category, subCategory, description, file ? (await uploadToS3(file, 'transactions')).uniqueFileName : null];
         await database.query(sql, values);
         res.status(200).json({ message: "Transaction added successfully", fileUploaded: !!file });
     } catch (error) {
@@ -160,13 +191,13 @@ app.post('/api/transactions', async (req, res) => {
 });
 
 // PUT transaction
-app.put('/api/transactions/:id', async (req, res) => {
-    const { id } = req.params;
+app.put('/api/transactions/:location/:id', async (req, res) => {
+    const { location, id } = req.params;
     const { date, type, amount, category, subCategory, description } = req.body;
     const file = req.files ? req.files.files : null;
 
     try {
-        const [originalFileResult] = await database.query('SELECT file FROM transactions WHERE id = ?', [id]);
+        const [originalFileResult] = await database.query(`SELECT file FROM \`${location}\` WHERE id = ?`, [id]);
         const originalFile = originalFileResult[0]?.file;
 
         let fileUrl = originalFile;
@@ -183,9 +214,8 @@ app.put('/api/transactions/:id', async (req, res) => {
             }
         }
 
-        const formattedDate = formatDate(date);
-        const sql = `UPDATE transactions SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
-        const values = [formattedDate, type, amount, category, subCategory, description, uniqueFileName, id];
+        const sql = `UPDATE \`${location}\` SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
+        const values = [date, type, amount, category, subCategory, description, uniqueFileName, id];
 
         await database.query(sql, values);
         res.status(200).json({ message: "Transaction updated successfully", fileUploaded: !!file, fileUrl });
@@ -195,13 +225,29 @@ app.put('/api/transactions/:id', async (req, res) => {
     }
 });
 
-// GET transactions
-app.get('/api/transactions', async (req, res) => {
+// GET all locations
+app.get('/api/locations', async (req, res) => {
     try {
-        const [results] = await database.query('SELECT * FROM transactions');
+        const [results] = await database.query('SHOW TABLES');
+        const locations = results
+            .map(row => Object.values(row)[0])
+            .filter(tableName => tableName.startsWith('location_'))  // Filter tables by prefix
+            .map(tableName => tableName.replace('location_', ''));  // Remove prefix for display
+        res.json({ locations });
+    } catch (error) {
+        console.error("Error fetching locations:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// GET transactions
+app.get('/api/transactions/:location', async (req, res) => {
+    const { location } = req.params;
+    try {
+        const [results] = await database.query(`SELECT * FROM \`location_${location}\``);
         const formattedResults = results.map(transaction => ({
             ...transaction,
-            date: formatDate(transaction.date)
+            date: new Date(transaction.date).toISOString().split('T')[0]
         }));
         res.json(formattedResults);
     } catch (error) {
@@ -211,21 +257,48 @@ app.get('/api/transactions', async (req, res) => {
 });
 
 // Get categories and subcategories
-app.get('/api/categories', async (req, res) => {
-    const categoriesQuery = 'SELECT DISTINCT category FROM transactions';
-    const subCategoriesQuery = 'SELECT DISTINCT subCategory FROM transactions';
-
+app.get('/api/categories/:location', async (req, res) => {
+    const { location } = req.params;
     try {
-        const [categoryResults] = await database.query(categoriesQuery);
-        const [subCategoryResults] = await database.query(subCategoriesQuery);
+        if (!database) {
+            throw new Error('Database connection not established');
+        }
 
-        const categories = categoryResults.map(result => result.category);
-        const subCategories = subCategoryResults.map(result => result.subCategory);
+        const [categoryResults] = await database.execute('SELECT DISTINCT category FROM `location_' + location + '`');
+        const [subCategoryResults] = await database.execute('SELECT DISTINCT subCategory FROM `location_' + location + '`');
+
+        if (!categoryResults || !subCategoryResults) {
+            throw new Error('Failed to fetch categories and subcategories');
+        }
+
+        const categories = categoryResults.map(row => row.category);
+        const subCategories = subCategoryResults.map(row => row.subCategory);
 
         res.json({ categories, subCategories });
     } catch (error) {
-        console.error("Error fetching categories and subcategories:", error);
-        res.status(500).json({ error: "Internal server error" });
+        console.error('Error fetching categories and subcategories:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Admin verify password
+app.post('/api/admin/verifyPassword', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const [rows] = await database.execute('SELECT * FROM users WHERE username =?', [username]);
+        if (rows.length > 0) {
+            const user = rows[0];
+            if (user.password === password) {
+                res.json({ success: true });
+            } else {
+                res.json({ success: false, message: 'Invalid password' });
+            }
+        } else {
+            res.json({ success: false, message: 'User not found' });
+        }
+    } catch (error) {
+        console.error('Error verifying password:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
