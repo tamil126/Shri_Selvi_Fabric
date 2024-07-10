@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(cors({
-    origin: 'https://newrainbowsarees.in/',
+    origin: 'https://newrainbowsarees.in',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -35,9 +35,9 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "127.0.0.1",
+    host: "localhost",
     user: "root",
-    password: "Tamils@126",
+    password: "",
     database: "shri_selvi_fabric"
 };
 
@@ -57,7 +57,7 @@ async function handleDisconnect() {
         });
     } catch (error) {
         console.error("Error connecting to database:", error);
-        setTimeout(handleDisconnect, 1000);
+        handleDisconnect();
     }
 }
 
@@ -142,30 +142,28 @@ function generateToken(id) {
     return token;
 }
 
-// Function to check and create table if not exists
+// Middleware to create table only when explicitly requested
 const checkAndCreateTable = async (tableName) => {
-    if (tableName.startsWith('location_')) {
-        const createTableQuery = `
-            CREATE TABLE IF NOT EXISTS \`${tableName}\` (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                date DATE NOT NULL,
-                type VARCHAR(255) NOT NULL,
-                amount DECIMAL(10, 2) NOT NULL,
-                category VARCHAR(255),
-                subCategory VARCHAR(255),
-                description TEXT,
-                file VARCHAR(255)
-            );
-        `;
-        await database.query(createTableQuery);
-    }
+    const createTableQuery = `
+        CREATE TABLE IF NOT EXISTS \`location_${tableName}\` (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            date DATE NOT NULL,
+            type VARCHAR(255) NOT NULL,
+            amount DECIMAL(10, 2) NOT NULL,
+            category VARCHAR(255),
+            subCategory VARCHAR(255),
+            description TEXT,
+            file VARCHAR(255)
+        );
+    `;
+    await database.query(createTableQuery);
 };
 
 // POST createTable
 app.post('/api/transactions/checkAndCreateTable', async (req, res) => {
     const { tableName } = req.body;
     try {
-        await checkAndCreateTable(`location_${tableName}`);
+        await checkAndCreateTable(tableName);
         res.status(200).json({ message: "Table created successfully" });
     } catch (error) {
         console.error('Error creating table:', error);
@@ -180,7 +178,7 @@ app.post('/api/transactions/:location', async (req, res) => {
     const file = req.files ? req.files.files : null;
 
     try {
-        const sql = `INSERT INTO \`${location}\` (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        const sql = `INSERT INTO \`location_${location}\` (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
         const values = [date, type, amount, category, subCategory, description, file ? (await uploadToS3(file, 'transactions')).uniqueFileName : null];
         await database.query(sql, values);
         res.status(200).json({ message: "Transaction added successfully", fileUploaded: !!file });
@@ -197,7 +195,7 @@ app.put('/api/transactions/:location/:id', async (req, res) => {
     const file = req.files ? req.files.files : null;
 
     try {
-        const [originalFileResult] = await database.query(`SELECT file FROM \`${location}\` WHERE id = ?`, [id]);
+        const [originalFileResult] = await database.query(`SELECT file FROM \`location_${location}\` WHERE id = ?`, [id]);
         const originalFile = originalFileResult[0]?.file;
 
         let fileUrl = originalFile;
@@ -214,7 +212,7 @@ app.put('/api/transactions/:location/:id', async (req, res) => {
             }
         }
 
-        const sql = `UPDATE \`${location}\` SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
+        const sql = `UPDATE \`location_${location}\` SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
         const values = [date, type, amount, category, subCategory, description, uniqueFileName, id];
 
         await database.query(sql, values);
@@ -260,16 +258,8 @@ app.get('/api/transactions/:location', async (req, res) => {
 app.get('/api/categories/:location', async (req, res) => {
     const { location } = req.params;
     try {
-        if (!database) {
-            throw new Error('Database connection not established');
-        }
-
         const [categoryResults] = await database.execute('SELECT DISTINCT category FROM `location_' + location + '`');
         const [subCategoryResults] = await database.execute('SELECT DISTINCT subCategory FROM `location_' + location + '`');
-
-        if (!categoryResults || !subCategoryResults) {
-            throw new Error('Failed to fetch categories and subcategories');
-        }
 
         const categories = categoryResults.map(row => row.category);
         const subCategories = subCategoryResults.map(row => row.subCategory);
