@@ -35,7 +35,7 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "srv533660.hstgr.cloud",
+    host: "127.0.0.1",
     user: "root",
     password: "Tamils@126",
     database: "shri_selvi_fabric"
