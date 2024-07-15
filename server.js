@@ -35,7 +35,7 @@ const s3Client = new S3Client({
 });
 
 const dbConfig = {
-    host: "127.0.0.1",
+    host: "srv533660.hstgr.cloud",
     user: "root",
     password: "Tamils@126",
     database: "shri_selvi_fabric"
@@ -233,7 +233,8 @@ app.get('/api/locations', async (req, res) => {
             .map(tableName => tableName.replace('location_', ''));  // Remove prefix for display
         res.json({ locations });
     } catch (error) {
-        console.error("Error fetching locations:", error);
+        console.error("Error fetching locations:", error.message);
+        console.error("Stack trace:", error.stack);
         res.status(500).json({ error: "Internal server error" });
     }
 });
