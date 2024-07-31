@@ -69,32 +69,37 @@ const generateUniqueName = (length = 6) => {
 
 const uploadToS3 = async (file, folder = 'transactions') => {
     try{
-    const uniqueFileName = `${generateUniqueName()}_${file.name}`;
-    const params = {
-        Bucket: 'newrainsarees',
-        Key: `${folder}/${uniqueFileName}`,
-        Body: file.data
-    };
-    const command = new PutObjectCommand(params);
-    const response = await s3Client.send(command);
-    return {
-        Location: `https://${params.Bucket}.s3.${AWS_REGION}.amazonaws.com/${params.Key}`,
-        uniqueFileName
-    };
-}catch(error){
-console.log("Error s3",error);
-throw error;
-}
+        const uniqueFileName = `${generateUniqueName()}_${file.name}`;
+        const params = {
+            Bucket: 'newrainsarees',
+            Key: `${folder}/${uniqueFileName}`,
+            Body: file.data
+        };
+        const command = new PutObjectCommand(params);
+        const response = await s3Client.send(command);
+        return {
+            Location: `https://${params.Bucket}.s3.${AWS_REGION}.amazonaws.com/${params.Key}`,
+            uniqueFileName
+        };
+    }catch(error){
+        console.error("Error uploading to S3:", error);
+        throw new Error("Failed to upload file to S3");
+    }
 };
 
 const deleteFromS3 = async (fileUrl) => {
-    const fileName = fileUrl.split('/').slice(-2).join('/');
-    const params = {
-        Bucket: 'newrainsarees',
-        Key: fileName
-    };
-    const command = new DeleteObjectCommand(params);
-    await s3Client.send(command);
+    try {
+        const fileName = fileUrl.split('/').slice(-2).join('/');
+        const params = {
+            Bucket: 'newrainsarees',
+            Key: fileName
+        };
+        const command = new DeleteObjectCommand(params);
+        await s3Client.send(command);
+    } catch (error) {
+        console.error("Error deleting from S3:", error);
+        throw new Error("Failed to delete file from S3");
+    }
 };
 
 const formatDate = (date) => {
@@ -179,7 +184,9 @@ app.post('/api/transactions/:location', async (req, res) => {
 
     try {
         const sql = `INSERT INTO \`location_${location}\` (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        const values = [date, type, amount, category, subCategory, description, file ? (await uploadToS3(file, 'transactions')).uniqueFileName : null];
+        const fileDetails = file ? await uploadToS3(file, 'transactions') : null;
+        const values = [date, type, amount, category, subCategory, description, fileDetails ? fileDetails.uniqueFileName : null];
+       	console.log("Inserting into database with values:", values);
         await database.query(sql, values);
         res.status(200).json({ message: "Transaction added successfully", fileUploaded: !!file });
     } catch (error) {
@@ -193,6 +200,8 @@ app.put('/api/transactions/:location/:id', async (req, res) => {
     const { location, id } = req.params;
     const { date, type, amount, category, subCategory, description } = req.body;
     const file = req.files ? req.files.files : null;
+
+    console.log("Update request received:", req.body, req.files);
 
     try {
         const [originalFileResult] = await database.query(`SELECT file FROM \`location_${location}\` WHERE id = ?`, [id]);
@@ -214,7 +223,7 @@ app.put('/api/transactions/:location/:id', async (req, res) => {
 
         const sql = `UPDATE \`location_${location}\` SET date=?, type=?, amount=?, category=?, subCategory=?, description=?, file=? WHERE id=?`;
         const values = [date, type, amount, category, subCategory, description, uniqueFileName, id];
-
+        console.log("Updating database with values:", values);
         await database.query(sql, values);
         res.status(200).json({ message: "Transaction updated successfully", fileUploaded: !!file, fileUrl });
     } catch (error) {
