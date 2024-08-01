@@ -183,17 +183,30 @@ app.post('/api/transactions/:location', async (req, res) => {
     const file = req.files ? req.files.files : null;
 
     try {
+        console.log("Received transaction data:", { location, date, type, amount, category, subCategory, description });
+
+        // Ensure the file exists and is valid
+        let fileDetails = null;
+        if (file) {
+            if (typeof file !== 'object' || !file.name) {
+                throw new Error("Invalid file uploaded");
+            }
+            fileDetails = await uploadToS3(file, 'transactions');
+            console.log("File uploaded to S3 with details:", fileDetails);
+        }
+
         const sql = `INSERT INTO \`location_${location}\` (date, type, amount, category, subCategory, description, file) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        const fileDetails = file ? await uploadToS3(file, 'transactions') : null;
         const values = [date, type, amount, category, subCategory, description, fileDetails ? fileDetails.uniqueFileName : null];
-       	console.log("Inserting into database with values:", values);
+        console.log("Inserting into database with values:", values);
         await database.query(sql, values);
+
         res.status(200).json({ message: "Transaction added successfully", fileUploaded: !!file });
     } catch (error) {
-        console.error("Error inserting transaction:", error);
+        console.error("Error inserting transaction:", error.message, error.stack);
         res.status(500).json({ error: "Internal server error" });
     }
 });
+
 
 // PUT transaction
 app.put('/api/transactions/:location/:id', async (req, res) => {
